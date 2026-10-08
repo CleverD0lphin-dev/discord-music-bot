@@ -250,4 +250,4 @@ if __name__ == "__main__":
     if TOKEN:
         bot.run(TOKEN)
     else:
-        print("Error: DISCORD_TOKEN missing in .env file.")
+        print("Error: DISCORD_TOKEN missing in .env file.") 
