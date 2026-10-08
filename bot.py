@@ -43,7 +43,7 @@ FFMPEG_OPTIONS = {
 
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 
-# Helper function to play the next song in the queue
+# Helper function to play the next song in queue automatically
 def play_next_in_queue(guild, channel):
     guild_id = guild.id
     if guild_id in song_queues and len(song_queues[guild_id]) > 0:
@@ -54,18 +54,22 @@ def play_next_in_queue(guild, channel):
             raw_source = discord.FFmpegPCMAudio(next_song['url'], **FFMPEG_OPTIONS)
             audio_source = discord.PCMVolumeTransformer(raw_source, volume=1.0)
             
-            # play next track and set recursion loop for subsequent songs
+            # Play next track and recursively bind queue handler to after-callback
             voice_client.play(
                 audio_source, 
                 after=lambda e: play_next_in_queue(guild, channel)
             )
 
-            # Send update message in text channel
+            # Send silent update embed in text channel (silent=True prevents notification sounds)
             view = MusicControlView(voice_client)
-            embed = discord.Embed(title="🎶 Now Playing", description=f"**{next_song['title']}**", color=discord.Color.blue())
-            embed.add_field(name="Volume", value="🔊 100%", inline=True)
+            embed = discord.Embed(
+                title="🎶 Now Playing", 
+                description=f"**{next_song['title']}**", 
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="Current Volume", value="🔊 100%", inline=True)
             
-            coro = channel.send(embed=embed, view=view)
+            coro = channel.send(embed=embed, view=view, silent=True)
             asyncio.run_coroutine_threadsafe(coro, bot.loop)
 
 # Interactive Control View with Dynamic Volume Display
@@ -102,7 +106,7 @@ class MusicControlView(discord.ui.View):
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.secondary, emoji="⏭️")
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.vc and (self.vc.is_playing() or self.vc.is_paused()):
-            self.vc.stop() # Stopping triggers the 'after' parameter to play the next queued song
+            self.vc.stop()  # Stopping triggers play_next_in_queue automatically
             await interaction.response.send_message("⏭️ Skipped song.", ephemeral=True)
         else:
             await interaction.response.send_message("No song to skip.", ephemeral=True)
@@ -168,13 +172,13 @@ async def play(interaction: discord.Interaction, search: str):
     if guild_id not in song_queues:
         song_queues[guild_id] = []
 
-    # If already playing, add to queue
+    # If already playing, append to queue
     if voice_client.is_playing() or voice_client.is_paused():
         song_queues[guild_id].append({'title': title, 'url': stream_url})
         queue_position = len(song_queues[guild_id])
-        return await interaction.followup.send(f"📥 Added to queue at **#{queue_position}**: **{title}**")
+        return await interaction.followup.send(f"📥 Added to queue at **#{queue_position}**: **{title}**", silent=True)
 
-    # If not playing, play immediately
+    # If not playing, start track immediately
     raw_source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
     audio_source = discord.PCMVolumeTransformer(raw_source, volume=1.0)
 
@@ -187,7 +191,7 @@ async def play(interaction: discord.Interaction, search: str):
     embed = discord.Embed(title="🎶 Now Playing", description=f"**{title}**", color=discord.Color.green())
     embed.add_field(name="Current Volume", value="🔊 100%", inline=True)
     
-    await interaction.followup.send(embed=embed, view=view)
+    await interaction.followup.send(embed=embed, view=view, silent=True)
 
 # /queue command to view current queue list
 @bot.tree.command(name="queue", description="View the current song queue")
@@ -198,7 +202,35 @@ async def queue(interaction: discord.Interaction):
 
     queue_list = "\n".join([f"**{i+1}.** {song['title']}" for i, song in enumerate(song_queues[guild_id])])
     embed = discord.Embed(title="📜 Up Next in Queue", description=queue_list, color=discord.Color.orange())
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, silent=True)
+
+# /remove command to delete a song by number or title search
+@bot.tree.command(name="remove", description="Remove a song from the queue by its number or name")
+@app_commands.describe(item="Queue position number (e.g. 1) or song name/title")
+async def remove(interaction: discord.Interaction, item: str):
+    guild_id = interaction.guild.id
+
+    if guild_id not in song_queues or len(song_queues[guild_id]) == 0:
+        return await interaction.response.send_message("The queue is currently empty.", ephemeral=True)
+
+    queue = song_queues[guild_id]
+
+    # Check if the user passed a position number
+    if item.isdigit():
+        index = int(item) - 1
+        if 0 <= index < len(queue):
+            removed_song = queue.pop(index)
+            return await interaction.response.send_message(f"🗑️ Removed **#{index + 1}**: **{removed_song['title']}** from the queue.", silent=True)
+        else:
+            return await interaction.response.send_message(f"Invalid position number. Queue size is currently {len(queue)}.", ephemeral=True)
+
+    # Search by title match (case-insensitive)
+    for i, song in enumerate(queue):
+        if item.lower() in song['title'].lower():
+            removed_song = queue.pop(i)
+            return await interaction.response.send_message(f"🗑️ Removed **#{i + 1}**: **{removed_song['title']}** from the queue.", silent=True)
+
+    await interaction.response.send_message(f"Could not find any song matching **'{item}'** in the queue.", ephemeral=True)
 
 # /stop command
 @bot.tree.command(name="stop", description="Stop music, clear queue, and disconnect")
@@ -210,7 +242,7 @@ async def stop(interaction: discord.Interaction):
     voice_client = interaction.guild.voice_client
     if voice_client and voice_client.is_connected():
         await voice_client.disconnect()
-        await interaction.response.send_message("Cleared queue and left the voice channel.")
+        await interaction.response.send_message("Cleared queue and left the voice channel.", silent=True)
     else:
         await interaction.response.send_message("Bot is not in a voice channel.", ephemeral=True)
 
