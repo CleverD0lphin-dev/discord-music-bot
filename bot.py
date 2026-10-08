@@ -60,7 +60,7 @@ def play_next_in_queue(guild, channel):
                 after=lambda e: play_next_in_queue(guild, channel)
             )
 
-            # Send silent update embed in text channel (silent=True prevents notification sounds)
+            # Send silent update embed in text channel
             view = MusicControlView(voice_client)
             embed = discord.Embed(
                 title="🎶 Now Playing", 
@@ -72,7 +72,7 @@ def play_next_in_queue(guild, channel):
             coro = channel.send(embed=embed, view=view, silent=True)
             asyncio.run_coroutine_threadsafe(coro, bot.loop)
 
-# Interactive Control View with Dynamic Volume Display
+# Interactive Control View with Instant Deferral (Fixes Timeout Error)
 class MusicControlView(discord.ui.View):
     def __init__(self, voice_client):
         super().__init__(timeout=None)
@@ -87,12 +87,14 @@ class MusicControlView(discord.ui.View):
             color=discord.Color.blue()
         )
         embed.add_field(name="Current Volume", value=f"🔊 {current_vol}%", inline=True)
-        await interaction.response.edit_message(embed=embed, view=self)
+        
+        await interaction.followup.edit_message(message_id=interaction.message.id, embed=embed, view=self)
 
     @discord.ui.button(label="Pause / Resume", style=discord.ButtonStyle.primary, emoji="⏯️")
     async def pause_resume_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         if not self.vc or not self.vc.is_connected():
-            return await interaction.response.send_message("Not connected to a voice channel.", ephemeral=True)
+            return await interaction.followup.send("Not connected to a voice channel.", ephemeral=True)
         
         if self.vc.is_playing():
             self.vc.pause()
@@ -101,35 +103,38 @@ class MusicControlView(discord.ui.View):
             self.vc.resume()
             await self.update_embed(interaction, "Resumed ▶️")
         else:
-            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
+            await interaction.followup.send("Nothing is playing.", ephemeral=True)
 
     @discord.ui.button(label="Skip", style=discord.ButtonStyle.secondary, emoji="⏭️")
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         if self.vc and (self.vc.is_playing() or self.vc.is_paused()):
-            self.vc.stop()  # Stopping triggers play_next_in_queue automatically
-            await interaction.response.send_message("⏭️ Skipped song.", ephemeral=True)
+            self.vc.stop()  # Triggers play_next_in_queue automatically
+            await interaction.followup.send("⏭️ Skipped song.", ephemeral=True)
         else:
-            await interaction.response.send_message("No song to skip.", ephemeral=True)
+            await interaction.followup.send("No song to skip.", ephemeral=True)
 
     @discord.ui.button(label="Vol -", style=discord.ButtonStyle.secondary, emoji="🔉")
     async def vol_down_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         if self.vc and self.vc.source:
             current_vol = getattr(self.vc.source, 'volume', 1.0)
             new_vol = max(0.0, current_vol - 0.1)
             self.vc.source.volume = new_vol
             await self.update_embed(interaction, f"Volume decreased to {int(new_vol * 100)}%")
         else:
-            await interaction.response.send_message("No active audio playing.", ephemeral=True)
+            await interaction.followup.send("No active audio playing.", ephemeral=True)
 
     @discord.ui.button(label="Vol +", style=discord.ButtonStyle.secondary, emoji="🔊")
     async def vol_up_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         if self.vc and self.vc.source:
             current_vol = getattr(self.vc.source, 'volume', 1.0)
             new_vol = min(2.0, current_vol + 0.1)
             self.vc.source.volume = new_vol
             await self.update_embed(interaction, f"Volume increased to {int(new_vol * 100)}%")
         else:
-            await interaction.response.send_message("No active audio playing.", ephemeral=True)
+            await interaction.followup.send("No active audio playing.", ephemeral=True)
 
 @bot.event
 async def on_ready():
@@ -193,7 +198,7 @@ async def play(interaction: discord.Interaction, search: str):
     
     await interaction.followup.send(embed=embed, view=view, silent=True)
 
-# /queue command to view current queue list
+# /queue command
 @bot.tree.command(name="queue", description="View the current song queue")
 async def queue(interaction: discord.Interaction):
     guild_id = interaction.guild.id
@@ -204,7 +209,7 @@ async def queue(interaction: discord.Interaction):
     embed = discord.Embed(title="📜 Up Next in Queue", description=queue_list, color=discord.Color.orange())
     await interaction.response.send_message(embed=embed, silent=True)
 
-# /remove command to delete a song by number or title search
+# /remove command
 @bot.tree.command(name="remove", description="Remove a song from the queue by its number or name")
 @app_commands.describe(item="Queue position number (e.g. 1) or song name/title")
 async def remove(interaction: discord.Interaction, item: str):
@@ -215,7 +220,6 @@ async def remove(interaction: discord.Interaction, item: str):
 
     queue = song_queues[guild_id]
 
-    # Check if the user passed a position number
     if item.isdigit():
         index = int(item) - 1
         if 0 <= index < len(queue):
@@ -224,7 +228,6 @@ async def remove(interaction: discord.Interaction, item: str):
         else:
             return await interaction.response.send_message(f"Invalid position number. Queue size is currently {len(queue)}.", ephemeral=True)
 
-    # Search by title match (case-insensitive)
     for i, song in enumerate(queue):
         if item.lower() in song['title'].lower():
             removed_song = queue.pop(i)
@@ -250,4 +253,4 @@ if __name__ == "__main__":
     if TOKEN:
         bot.run(TOKEN)
     else:
-        print("Error: DISCORD_TOKEN missing in .env file.") 
+        print("Error: DISCORD_TOKEN missing in .env file.")
